@@ -82,7 +82,12 @@ but it does not avoid the `throwErrors()` failure, so the world lookup is prefer
 
 ## Interim workaround used in the affected pack
 
-A small mixin mod that (a) logs instead of throwing in
-`RegistryBuilder$Registries#throwErrors` and (b) caches
-`BuiltinRegistries#createWrapperLookup`. Chunks load correctly again; happy to share the source if
-useful.
+A small mixin mod that does exactly the suggested fix: its `CompatRegistryLookup` mixin redirects the
+`BuiltinRegistries.createWrapperLookup()` call in the no-arg constructor to the running server's
+`getRegistryManager()`, so the registry is never rebuilt and nothing is thrown or suppressed (it falls
+back to the original call when no server is running). Source and jar:
+https://github.com/Klannato/socks-chunkfix (MIT, v1.1.0) — it exists only to bridge the gap until
+MCPitanLib does this itself.
+
+Earlier builds relaxed `RegistryBuilder$Registries#throwErrors` and cached the builtin lookup;
+v1.1.0 removed both, so nothing is hidden from the maintainer any more.

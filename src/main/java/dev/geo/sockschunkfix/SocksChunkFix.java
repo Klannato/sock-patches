@@ -9,6 +9,6 @@ public final class SocksChunkFix implements ModInitializer {
     @Override
     public void onInitialize() {
         SelfTestCommand.register();
-        LOGGER.info("Registry relax + lookup cache active.");
+        LOGGER.info("Loaded: MCPitanLib registry lookups resolve against the live server instead of rebuilding builtin registries.");
     }
 }

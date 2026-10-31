@@ -3,8 +3,8 @@
 A tiny Fabric 1.20.1 mixin mod that stops chunks from rendering as **void** when a block entity from
 an MCPitanLib-based mod (Item Alchemy's condensers, alchemy chests, collectors, …) is in that chunk.
 
-No world data is changed, nothing is added to the game; it only makes the chunk-data path not throw
-and not rebuild the entire registry for every block entity.
+It does **not** suppress any errors and does not touch world data: it hands MCPitanLib the running
+server's registry manager instead of letting it rebuild every builtin registry.
 
 ## The symptom
 
@@ -34,35 +34,44 @@ chunk.
 The dangling registry key is not a pack defect you can patch with a datapack: with Yttr installed,
 `yttr:wasteland` registers and generates normally (`/locate biome yttr:wasteland` finds one), yet
 `validateReferences()` still reports it because Yttr's surface rule and `c:` biome tags hold a raw
-`RegistryKey` that gets a stand-in entry before the value lands.
-
-A datapack defining the "missing" biome was tested on a fresh world and changed nothing.
+`RegistryKey` that gets a stand-in entry before the value lands. A datapack defining the "missing"
+biome was tested on a fresh world and changed nothing.
 
 ## What the mod does
 
-| Mixin | Target | Why |
+| Mixin | Target | What it changes |
 |---|---|---|
-| `RegistryBuilderRegistriesMixin` | `RegistryBuilder$Registries#throwErrors` | Logs the dangling keys instead of aborting registry creation, so the chunk packet can be built. Throttled to 3 warnings per JVM. |
-| `BuiltinRegistriesMixin` | `BuiltinRegistries#createWrapperLookup` | Caches the result. Without it every block entity of every chunk rebuilt all builtin registries. |
+| `CompatRegistryLookupMixin` | `CompatRegistryLookup()` (MCPitanLib) | Redirects the `BuiltinRegistries.createWrapperLookup()` call to the live server's `DynamicRegistryManager` — already a `RegistryWrapper.WrapperLookup` on 1.20.1. No rebuild, nothing thrown, no error swallowed. |
+| `MinecraftServerMixin` | `MinecraftServer#<init>` / `#shutdown` | Captures (and releases) the running server so the mixin above can ask for its registry manager. Vanilla-only, no Fabric API needed. |
 
-Measured on a ~110-mod 1.20.1 pack (Item Alchemy 1.4.1, MCPitanLib 4.0.9, Yttr 9.20.1138):
+If no server is running (pure client, world closing) the original call is made and upstream behaviour
+applies unchanged — the mod never invents a lookup and never hides a failure.
+
+Measured on a ~110-mod 1.20.1 pack (Item Alchemy 1.4.1, MCPitanLib 4.0.9, Yttr 9.20.1138), first
+serialization of a condenser after server start:
 
 ```
-Suppressing 1 registry build error(s) … Unreferenced key: … yttr:wasteland
-OK: EMCCondenserTile serialized for chunk data in 204298 us (0 NBT keys) - no registry exception
-OK: EMCCondenserTile serialized for chunk data in 17 us      ← second call, cache hit
+CompatRegistryLookup now uses the live server registry manager (no builtin registry rebuild, no registry errors on this path).
+OK: EMCCondenserTile serialized for chunk data in 145 us (0 NBT keys) - no registry exception
+OK: EMCCondenserTile serialized for chunk data in 6 us       ← repeat call
 ```
+
+Versus **204 298 µs** for the same call on the 1.0.0 build (which relaxed the throw and cached the
+builtin lookup): the registry is not built at all any more.
+
+`0 NBT keys` is normal here — Item Alchemy syncs condenser contents through block-entity update
+packets (`BLOCK_ENTITY_UPDATE_S2C`), not through initial chunk data.
 
 ## Install
 
-1. Drop `socks-chunkfix-1.0.0.jar` in the **server's** `mods/` folder — the failure happens in chunk
+1. Drop `socks-chunkfix-1.1.0.jar` in the **server's** `mods/` folder — the failure happens in chunk
    packet generation, so the server needs it. Restart the server.
 2. Install it **client-side too** (same jar, `mods/` in your instance) if you play singleplayer or
    host a LAN world: there the client *is* the server.
 3. Nothing to configure, no commands required to play.
 
 Requires: Minecraft 1.20.1, Fabric Loader ≥ 0.15, Java 17. Fabric API is only needed for the optional
-diagnostic command below — the two mixins are pure Fabric Loader.
+diagnostic command below — both mixins are pure Fabric Loader.
 
 ## Diagnostic command
 
@@ -74,7 +83,7 @@ Runs the exact call that used to throw — `toInitialChunkDataNbt()` on the bloc
 position — and reports the result plus how long it took:
 
 ```
-OK: EMCCondenserTile serialized for chunk data in 17 us (0 NBT keys) - no registry exception
+OK: EMCCondenserTile serialized for chunk data in 6 us (0 NBT keys) - no registry exception
 FAILED: IllegalStateException: Errors during registry creation
 ```
 
@@ -88,38 +97,51 @@ cd socks-chunkfix
 ./gradlew build            # JDK 17 required; artifact in build/libs/
 ```
 
-No local jars or proprietary dependencies — Loom downloads Minecraft 1.20.1 and Yarn mappings on the
-first run. Verified by cloning this repo fresh and running the command above.
+No local jars and no proprietary dependencies — Loom downloads Minecraft 1.20.1 and Yarn mappings on
+the first run. Verified by cloning this repo fresh and running the command above.
+
+The build disables the legacy Mixin annotation processor (`loom.mixin.useLegacyMixinAp = false`)
+because `CompatRegistryLookupMixin` targets a mod class that is deliberately **not** on the compile
+classpath; Loom remaps the `@At` targets itself, so the jar carries no refmap and no MCPitanLib
+dependency.
 
 ## Verification, and what it does **not** cover
 
-What was actually run (see `docs/upstream/mcpitanlib-issue.md` for the full log excerpt):
+What was actually run on a dedicated 1.20.1 server with the full mod list:
 
-- A dedicated 1.20.1 server started with the full mod list, a fresh world, an
-  `itemalchemy:emc_condenser` placed with `setblock`, then `/sockschunkfix selftest` → serialization
-  succeeds, 204 ms first call, 17 µs cached.
-- Without the mod, the same call throws `IllegalStateException: Errors during registry creation` and
-  the chunk packet is dropped — that is the bug being fixed.
-- Mixins apply cleanly: no "Mixin apply failed" in the server log; mod list shows `socks_chunkfix`.
+- Fresh world, `itemalchemy:emc_condenser` placed with `setblock`, then `/sockschunkfix selftest` →
+  serialization succeeds in 145 µs, repeat 6 µs, log shows the live-lookup line once and **zero**
+  "Suppressing" warnings (nothing is swallowed).
+- Without the mod the same call throws `IllegalStateException: Errors during registry creation` and
+  the chunk packet is dropped — that is the bug being fixed (stack trace in
+  `docs/upstream/mcpitanlib-issue.md`).
+- Mixins apply cleanly: no "Mixin apply failed" in the log; mod list shows `socks_chunkfix 1.1.0`.
+- 1.0.0 (the earlier relax-and-cache build) was verified the same way; 1.1.0 removes the error
+  suppression entirely.
 
 Not covered: no automated test suite, no in-game screenshot diff of a formerly-void chunk, and the
 fix is only exercised on 1.20.1 Fabric. CI does not run.
 
 ## Limitations (honest ones)
 
-- This **suppresses** registry-build errors pack-wide, not just for block entities. If a pack has a
-  genuinely broken registry entry, you lose the loud crash that would have told you so — the warning
-  in the log is all you get. Prefer fixing the pack when you can.
-- The cached lookup comes from `BuiltinRegistries`, which is static, so reuse is safe across worlds,
-  but a mod that mutates builtin registries at runtime would not be respected.
+- Only MCPitanLib's `CompatRegistryLookup` is fixed. Another mod that calls
+  `BuiltinRegistries.createWrapperLookup()` at runtime with a dangling-key pack will still throw —
+  this mod no longer hides that, deliberately.
+- It needs a running server at the moment of the call. On a pure client there is none, and upstream
+  behaviour applies (which is fine: initial chunk data is only built server-side).
 - It does not fix the underlying library bug. That is filed upstream:
-  [Pitan76/MCPitanLib#245](https://github.com/Pitan76/MCPitanLib/issues/245) — `DynamicRegistryManager`
-  already implements `RegistryWrapper.WrapperLookup` on 1.20.1, so MCPitanLib can pass
-  `world.getRegistryManager()` instead of rebuilding the registry. When that ships, this mod becomes
-  unnecessary.
+  [Pitan76/MCPitanLib#245](https://github.com/Pitan76/MCPitanLib/issues/245) — when MCPitanLib passes
+  `world.getRegistryManager()` itself, this mod becomes unnecessary.
 - Related upstream report: [Pitan76/item-alchemy#135](https://github.com/Pitan76/item-alchemy/issues/135)
   (comment with this analysis). Yttr's side is drafted in `docs/upstream/yttr-issue.md`; Yttr's tracker
   is GitLab (`git.sleeping.town/exa.mods/Yttr`), which needs its own account.
+
+## Changelog
+
+- **1.1.0** — proper fix: registry lookup comes from the live server; the 1.0.0 error suppression and
+  builtin-lookup cache are gone.
+- **1.0.0** — first working build: logged instead of throwing in
+  `RegistryBuilder$Registries#throwErrors` and cached `BuiltinRegistries#createWrapperLookup`.
 
 ## Uninstall
 
@@ -129,13 +151,14 @@ Delete the jar and restart. Nothing persists — no config, no world data, no st
 
 ```
 src/main/java/dev/geo/sockschunkfix/
-  SocksChunkFix.java              mod initializer, logger
-  SelfTestCommand.java            /sockschunkfix selftest diagnostic
-  mixin/RegistryBuilderRegistriesMixin.java   relax throwErrors
-  mixin/BuiltinRegistriesMixin.java           cache createWrapperLookup
+  SocksChunkFix.java                          mod initializer, logger
+  RegistryLookupSource.java                   holds the live server's registry manager
+  SelfTestCommand.java                        /sockschunkfix selftest diagnostic
+  mixin/CompatRegistryLookupMixin.java        redirect the rebuild to the live registry manager
+  mixin/MinecraftServerMixin.java             capture/release the running server
 src/main/resources/
   fabric.mod.json, socks-chunkfix.mixins.json
-docs/upstream/                    the issue reports filed/drafted for the real fix
+docs/upstream/                                the issue reports filed/drafted for the real fix
 ```
 
 ## License

@@ -13,6 +13,14 @@ repositories {
     mavenCentral()
 }
 
+// No legacy Mixin annotation processor: the CompatRegistryLookup mixin targets a mod class that is
+// not on the compile classpath, so targets/method names stay literal in the source.
+loom {
+    mixin {
+        useLegacyMixinAp = false
+    }
+}
+
 dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
