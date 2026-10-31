@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.geo.sockschunkfix.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "mixins": [
+    "BuiltinRegistriesMixin",
+    "RegistryBuilderRegistriesMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

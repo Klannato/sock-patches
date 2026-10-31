@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "socks_chunkfix",
+  "version": "${version}",
+  "name": "Socks Chunk Fix",
+  "description": "Keeps chunks from going void when a block entity serializes chunk data through MCPitanLib and the pack has dangling registry keys.",
+  "authors": [
+    "Klannato"
+  ],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "dev.geo.sockschunkfix.SocksChunkFix"
+    ]
+  },
+  "mixins": [
+    "socks-chunkfix.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "minecraft": ">=1.20.1"
+  }
+}
